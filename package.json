@@ -1,0 +1,30 @@
+{
+  "name": "dsh-session-unarchive",
+  "version": "0.1.0",
+  "description": "dsh plugin: view archived sessions and restore them to their workspace in the Web GUI.",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "patches/*.patch",
+    "originals/**/*.js"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "session",
+    "archive",
+    "unarchive"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dylan121322/dsh-session-unarchive.git"
+  },
+  "license": "MIT"
+}

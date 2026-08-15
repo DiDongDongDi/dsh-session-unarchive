@@ -1,79 +1,53 @@
 # dsh-session-unarchive
 
-给 [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) `0.1.0-rc.6` Web GUI 补齐「已归档」会话管理：**查看已归档会话 + 一键恢复**。
+Adds an archived-sessions view and a restore action to the dsh Web GUI.
 
-## 背景
+## What it does
 
-dsh 的会话「归档」是单向操作：点击「归档会话」后，会话从侧栏所有视图（分组 / 单列表 / 搜索）中消失，且**没有任何入口找回**。数据并未删除（`session.jsonl.zstd` 仍在 `~/.dsh/sessions/` 下，归档只是把 session id 写入 `~/.dsh/storages/workspace.json` 的 `archivedSessionIds`），但 GUI 无法取消归档。
+- Shows an **Archived** section at the bottom of the sidebar, listing every archived session.
+- Adds a **Restore session** menu item that unarchives a session and returns it to its original position in its workspace.
+- Works in both zh-CN and en locales.
 
-本仓库补上缺失的另一半：
-
-- 侧栏底部新增「已归档 · N」区块（可展开 / 收起）
-- 每个归档会话行显示标题、时间、操作菜单
-- 行菜单「恢复会话 / Restore session」：从归档集合移除，会话**回到原工作区原位**（归档时 workspace 槽位保留，unarchive 后自动复原）
-- 中英文案齐全（workspace locale namespace）
-
-## 改动清单（9 文件 / 5 包，均为编译产物 lib/*.js）
-
-| 包 | 文件 | 改动 |
-|----|------|------|
-| `dsh-workspace` | `lib/index.js` | registry 加 `unarchiveSession()` 持久化方法 |
-| `dsh-host-apiproxy` | `lib/index.js` | bundler：schema / handler map / response map / fetch 方法 / api 实现 |
-| | `lib/types/api/workspace.schema.js` | `workspace.unarchiveSession` request/response zod schema |
-| | `lib/types/api-proxy.js` | api 实现（与 bundler 保持一致） |
-| | `lib/types/fetch/client.js` | response 校验映射 + `unarchiveSession` 调用方法 |
-| | `lib/types/fetch/handler.js` | RPC handler 路由 |
-| `dsh-client-connection` | `lib/client.js` | 内联 schema / fetch 映射 / fixture 模拟 |
-| `dsh-client-runtime` | `lib/client.js` | workspace manager + service 的 `unarchiveSession` |
-| `dsh-client-ui-workspace` | `lib/client.js` | `ArchivedSection` 组件、恢复菜单、i18n、注入 action |
-
-## 使用
+## Install
 
 ```bash
-git clone https://github.com/dylan121322/dsh-session-unarchive.git
-cd dsh-session-unarchive
-./apply.sh          # 或 ./apply.sh check 先干跑
+dsh plugin add github:dylan121322/dsh-session-unarchive
 ```
 
-apply.sh 会：
+## Activate
 
-1. 定位 dsh 全局安装（`npm root -g` → `@deepseek-ai/dsh/node_modules/@deepseek-ai`）
-2. 逐个校验目标文件：原始未改 → 应用；已含 `unarchiveSession` → 跳过；被本地改过且未打补丁 → 拒绝并要求人工处理
-3. `patch -p1` 应用，幂等可重复执行
+1. Restart dsh. The first boot applies the patches to five dsh packages and prints a notice.
+2. Restart dsh once more (host files take effect after that).
+3. Refresh the browser at http://127.0.0.1:3080.
 
-应用后：
+Every later boot detects the patches as applied and stays quiet. The plugin is idempotent: it never re-applies or corrupts files, and it refuses to touch targets that were modified locally.
 
-```bash
-# 1. 重启 dsh（host 端加载新代码）
-#    找到 `dsh --profile web` 进程，kill 后重新启动
-# 2. 刷新浏览器 http://127.0.0.1:3080
-# 3. 侧栏底部出现「已归档」区块，展开 → ⋯ → 恢复会话
-```
+## How it works
 
-## 手动重放（不用 apply.sh）
+dsh 0.1.0-rc.6 archives sessions one-way: the GUI hides them from every view and offers no way back. The data is never deleted — the session id is only recorded in `~/.dsh/storages/workspace.json` (`global.archivedSessionIds`).
 
-```bash
-cd "$(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai"
-for p in /path/to/repo/patches/*.patch; do patch -p1 < "$p"; done
-```
+The cordis patch layer can override entry properties but cannot redirect an existing plugin's implementation file, so this bundle ships file patches instead. The plugin entry (`index.js`) runs at boot, verifies each target against the pristine originals in `originals/`, and applies the diffs in `patches/`.
 
-## 验证
+Patched packages:
 
-- 归档一个会话 → 侧栏底部「已归档 · N」出现
-- 展开区块 → 该会话行可见
-- 行菜单「恢复会话」→ 会话回到原工作区分组、区块消失
-- `~/.dsh/storages/workspace.json` 的 `global.archivedSessionIds` 同步移除该 id
+| Package | Change |
+|---------|--------|
+| `dsh-workspace` | Adds `unarchiveSession()` to the workspace registry. |
+| `dsh-host-apiproxy` | Adds the `workspace.unarchiveSession` RPC end to end. |
+| `dsh-client-connection` | Adds fetch mapping and fixture support. |
+| `dsh-client-runtime` | Adds manager and service methods. |
+| `dsh-client-ui-workspace` | Adds the archived section, restore menu, and i18n. |
 
-## 目录结构
+## Manual fallback
 
-```
-├── apply.sh        # 安全重放脚本（幂等、带校验）
-├── patches/        # 5 个 unified diff（基于 rc.6 原始产物）
-└── originals/      # 9 个原始文件基准（apply.sh 用于校验目标未被本地改过）
-```
+If `dsh plugin add` is not an option, `./apply.sh` applies the same patches directly (`./apply.sh check` for a dry run).
 
-## 注意事项
+## Compatibility
 
-- 目标版本：`@deepseek-ai/dsh@0.1.0-rc.6`（patches 基于该版本生成，其他版本行号可能偏移）
-- 修改的是 npm 全局安装的**编译产物**：dsh 升级会覆盖改动，升级后需重新 `./apply.sh`
-- 更彻底的方案是向上游提交 PR（对应源码目录：`packages/workspace`、`packages/host/apiproxy`、`packages/client/connection`、`packages/client/runtime`、`packages/client/ui-workspace`），本仓库可作为补丁基准参考
+Targets `@deepseek-ai/dsh@0.1.0-rc.6`. Patches are generated against that version's build output; other versions may not apply. A dsh upgrade overwrites the patched files — re-run `dsh plugin add` (or `./apply.sh`) after upgrading.
+
+## Verify
+
+1. Archive any session: the **Archived** section appears at the bottom of the sidebar.
+2. Expand it and pick **Restore session** from the row menu.
+3. The session returns to its workspace group, the section disappears, and `archivedSessionIds` in `~/.dsh/storages/workspace.json` no longer contains the id.
