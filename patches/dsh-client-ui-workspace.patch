@@ -1,0 +1,185 @@
+--- a/dsh-client-ui-workspace/lib/client.js
++++ b/dsh-client-ui-workspace/lib/client.js
+@@ -689,15 +689,21 @@
+ 		* @param props.t - the browser root's locale seat.
+ 		* @returns the session row.
+ 		*/
+-		function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onArchive, drag, flat = false, t }) {
++		function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onArchive, onUnarchive, drag, flat = false, t }) {
+ 			const row = node;
+ 			const title = displayTitle(node, t);
+ 			const selected = node.id === currentId;
+ 			const statuses = sessionStatuses(node, t);
+ 			const showStatus = statuses[0].state !== "done" || row.completed;
+ 			const [menuOpen, setMenuOpen] = (0, react.useState)(false);
+-			const sessionMenuItems = [
++			const sessionMenuItems = onUnarchive !== void 0 ? [
+ 				{
++					id: "unarchive",
++					label: t("menu.unarchiveSession"),
++					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutline16, {})
++				}
++			] : [
++				{
+ 					id: "rename",
+ 					label: t("rename"),
+ 					icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, {})
+@@ -765,6 +771,7 @@
+ 									if (id === "rename") onRename(node.id, row.title);
+ 									if (id === "fork") onFork(node.id);
+ 									if (id === "archive") onArchive(node.id);
++									if (id === "unarchive") onUnarchive(node.id);
+ 								},
+ 								portal: true,
+ 								closeOnPointerLeave: true,
+@@ -791,6 +798,63 @@
+ 				copyText: row.blank ? void 0 : row.title,
+ 				copyLabel: t("copy"),
+ 				copiedLabel: t("hover.copied")
++			});
++		}
++		/**
++		* Registry-global archive section: every archived session as a collapsed
++		* overflow group. Restoring removes the session from the archive set and
++		* its workspace slot (kept at archive time) shows it again.
++		* @param props.useSessions - sessions list seat.
++		* @param props.open - open a session by id.
++		* @param props.onSessionUnarchive - restore a session by id.
++		* @param props.archivedSessionIds - registry-global archive set.
++		* @param props.t - locale seat.
++		* @returns the archived sessions section, or null when none are archived.
++		*/
++		function ArchivedSection({ useSessions, open, onSessionUnarchive, archivedSessionIds, t }) {
++			const list = useSessions((s) => s);
++			const [expanded, setExpanded] = (0, react.useState)(false);
++			const rows = (0, react.useMemo)(() => {
++				const archived = new Set(archivedSessionIds);
++				const descendants = (0, _deepseek_ai_dsh_client_runtime_client.indexSubagentDescendants)(list.byId);
++				const sessions = [];
++				for (const id of list.ids) {
++					const summary = list.byId[id];
++					if (summary !== void 0 && !summary.blank && summary.origin !== "subagent" && archived.has(id)) sessions.push(summary);
++				}
++				sessions.sort(byRecency);
++				return sessions.map((summary) => sessionNode(summary, descendants));
++			}, [list, archivedSessionIds]);
++			if (rows.length === 0) return null;
++			const now = Date.now();
++			return (0, react_jsx_runtime.jsxs)("div", {
++				className: WorkspaceBrowser_module_css_default.groupSection,
++				children: [
++					(0, react_jsx_runtime.jsx)("button", {
++						type: "button",
++						className: WorkspaceBrowser_module_css_default.sessionOverflowButton,
++						"aria-expanded": expanded,
++						onClick: () => {
++							setExpanded((v) => !v);
++						},
++						children: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
++							(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutline20, { size: 14 }),
++							" ",
++							t("section.archived"),
++							" · ",
++							rows.length
++						] })
++					}),
++					expanded && rows.map((node) => (0, react_jsx_runtime.jsx)(SessionNodeItem, {
++						node,
++						currentId: list.current,
++						now,
++						onOpen: open,
++						onUnarchive: onSessionUnarchive,
++						flat: true,
++						t
++					}))
++				]
+ 			});
+ 		}
+ 		//#endregion
+@@ -1644,7 +1708,7 @@
+ 		* @param props - composed slot props (shell owner share + store + injected actions).
+ 		* @returns the region element tree.
+ 		*/
+-		function WorkspaceBrowser({ wide, expandSidebar, useSessions, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, archiveSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, renderSlot, t }) {
++		function WorkspaceBrowser({ wide, expandSidebar, useSessions, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, archiveSession, unarchiveSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, renderSlot, t }) {
+ 			const workspaces = useWorkspaces((state) => state.items);
+ 			const workspacePhase = useWorkspaces((state) => state.phase);
+ 			const archivedSessionIds = useWorkspaces((state) => state.archivedSessionIds);
+@@ -1818,6 +1882,11 @@
+ 					console.warn("session archive rejected:", reason);
+ 				});
+ 			};
++			const onSessionUnarchive = (sessionId) => {
++				unarchiveSession(sessionId).catch((reason) => {
++					console.warn("session unarchive rejected:", reason);
++				});
++			};
+ 			const [deleteTarget, setDeleteTarget] = (0, react.useState)(null);
+ 			const [deleting, setDeleting] = (0, react.useState)(false);
+ 			const [deleteCommittedId, setDeleteCommittedId] = (0, react.useState)(null);
+@@ -1982,7 +2051,7 @@
+ 					}),
+ 					(0, react_jsx_runtime.jsx)("div", {
+ 						className: WorkspaceBrowser_module_css_default.listArea,
+-						children: wide && (normalizedQuery !== "" ? (0, react_jsx_runtime.jsx)(SearchResults, {
++						children: [wide && (normalizedQuery !== "" ? (0, react_jsx_runtime.jsx)(SearchResults, {
+ 							useSessions,
+ 							open,
+ 							workspaces,
+@@ -2038,7 +2107,13 @@
+ 								});
+ 								setDeleteError(null);
+ 							}
+-						}))
++						})), wide && (0, react_jsx_runtime.jsx)(ArchivedSection, {
++							useSessions,
++							open,
++							onSessionUnarchive,
++							archivedSessionIds,
++							t
++						})]
+ 					}),
+ 					(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+ 						open: renameTarget !== null,
+@@ -2186,6 +2261,7 @@
+ 			"session.new": "新会话",
+ 			"section.workspaces": "工作区",
+ 			"section.sessions": "会话",
++			"section.archived": "已归档",
+ 			"viewOptions.label": "视图选项",
+ 			"groupBy.label": "分组方式",
+ 			"groupBy.workspace": "按工作区",
+@@ -2221,6 +2297,7 @@
+ 			"delete.pending": "正在删除工作区…",
+ 			"menu.fork": "分叉会话",
+ 			"menu.archiveSession": "归档会话",
++			"menu.unarchiveSession": "恢复会话",
+ 			"sessions.count.one": "{n} 个会话",
+ 			"sessions.count.other": "{n} 个会话",
+ 			"actions.workspace.aria": "工作区“{name}”的操作",
+@@ -2251,6 +2328,7 @@
+ 			"session.new": "New Session",
+ 			"section.workspaces": "Workspaces",
+ 			"section.sessions": "Sessions",
++			"section.archived": "Archived",
+ 			"viewOptions.label": "View options",
+ 			"groupBy.label": "Group by",
+ 			"groupBy.workspace": "WorkSpace",
+@@ -2286,6 +2364,7 @@
+ 			"delete.pending": "Deleting workspace…",
+ 			"menu.fork": "Fork session",
+ 			"menu.archiveSession": "Archive session",
++			"menu.unarchiveSession": "Restore session",
+ 			"sessions.count.one": "{n} session",
+ 			"sessions.count.other": "{n} sessions",
+ 			"actions.workspace.aria": "Workspace actions for {name}",
+@@ -2385,6 +2464,9 @@
+ 				archiveSession: async (sessionId) => {
+ 					await ctx.workspaces.archiveSession(sessionId);
+ 				},
++				unarchiveSession: async (sessionId) => {
++					await ctx.workspaces.unarchiveSession(sessionId);
++				},
+ 				insertSessionBefore: async (workspaceId, sessionId, beforeSessionId) => {
+ 					await ctx.workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId);
+ 				},

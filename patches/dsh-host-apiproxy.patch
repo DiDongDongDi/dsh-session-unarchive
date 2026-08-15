@@ -1,0 +1,130 @@
+--- a/dsh-host-apiproxy/lib/types/fetch/client.js
++++ b/dsh-host-apiproxy/lib/types/fetch/client.js
+@@ -9,7 +9,7 @@
+ import { hostFrameSchema, muxFrameSchema } from "../api/events.schema.js";
+ import { hostCreateDirectoryValueSchema, hostDescribeValueSchema, hostListDirectoryValueSchema, hostOpenPathValueSchema, hostPickDirectoryValueSchema, } from "../api/host.schema.js";
+ import { sessionCancelValueSchema, sessionAttachmentValueSchema, sessionCreateValueSchema, sessionForkValueSchema, sessionHistoryValueSchema, sessionListValueSchema, sessionModelsValueSchema, sessionPromptValueSchema, sessionRenameValueSchema, sessionSearchValueSchema, sessionSelectModelValueSchema, sessionUpdateQueueValueSchema, } from "../api/sessions.schema.js";
+-import { workspaceArchiveSessionValueSchema, workspaceCreateValueSchema, workspaceDeleteValueSchema, workspaceInsertBeforeValueSchema, workspaceInsertSessionBeforeValueSchema, workspaceListValueSchema, workspaceRenameValueSchema, } from "../api/workspace.schema.js";
++import { workspaceArchiveSessionValueSchema, workspaceCreateValueSchema, workspaceDeleteValueSchema, workspaceInsertBeforeValueSchema, workspaceInsertSessionBeforeValueSchema, workspaceListValueSchema, workspaceRenameValueSchema, workspaceUnarchiveSessionValueSchema, } from "../api/workspace.schema.js";
+ import { skillListValueSchema } from "../api/skills.schema.js";
+ import { agentPresetCopyValueSchema, agentPresetListValueSchema, agentPresetOpenDocumentValueSchema, agentPresetReadValueSchema, agentPresetRemoveValueSchema, agentPresetSelectValueSchema, } from "../api/agent-presets.schema.js";
+ import { goalCreateValueSchema, goalEditValueSchema, goalPauseValueSchema, goalResumeValueSchema, goalCompleteValueSchema, goalClearValueSchema, } from "../api/goals.schema.js";
+@@ -50,6 +50,7 @@
+     'workspace.insertBefore': workspaceInsertBeforeValueSchema,
+     'workspace.insertSessionBefore': workspaceInsertSessionBeforeValueSchema,
+     'workspace.archiveSession': workspaceArchiveSessionValueSchema,
++    'workspace.unarchiveSession': workspaceUnarchiveSessionValueSchema,
+     'skill.list': skillListValueSchema,
+     'agentPreset.list': agentPresetListValueSchema,
+     'agentPreset.select': agentPresetSelectValueSchema,
+@@ -276,6 +277,7 @@
+         insertBefore: (payload, signal) => this.callUnary('workspace.insertBefore', payload, signal),
+         insertSessionBefore: (payload, signal) => this.callUnary('workspace.insertSessionBefore', payload, signal),
+         archiveSession: (payload, signal) => this.callUnary('workspace.archiveSession', payload, signal),
++        unarchiveSession: (payload, signal) => this.callUnary('workspace.unarchiveSession', payload, signal),
+     };
+     skills = {
+         list: (payload, signal) => this.callUnary('skill.list', payload, signal),
+--- a/dsh-host-apiproxy/lib/types/fetch/handler.js
++++ b/dsh-host-apiproxy/lib/types/fetch/handler.js
+@@ -11,7 +11,7 @@
+ import { clientRequestSchema, clientResponseSchema } from "../api/rpc.schema.js";
+ import { sessionCancelRequestSchema, sessionAttachmentRequestSchema, sessionCreateRequestSchema, sessionForkRequestSchema, sessionHistoryRequestSchema, sessionListRequestSchema, sessionModelsRequestSchema, sessionPromptRequestSchema, sessionRenameRequestSchema, sessionSearchRequestSchema, sessionSelectModelRequestSchema, sessionUpdateQueueRequestSchema, } from "../api/sessions.schema.js";
+ import { hostCreateDirectoryRequestSchema, hostDescribeRequestSchema, hostListDirectoryRequestSchema, hostOpenPathRequestSchema, hostPickDirectoryRequestSchema, } from "../api/host.schema.js";
+-import { workspaceArchiveSessionRequestSchema, workspaceCreateRequestSchema, workspaceDeleteRequestSchema, workspaceInsertBeforeRequestSchema, workspaceInsertSessionBeforeRequestSchema, workspaceListRequestSchema, workspaceRenameRequestSchema, } from "../api/workspace.schema.js";
++import { workspaceArchiveSessionRequestSchema, workspaceCreateRequestSchema, workspaceDeleteRequestSchema, workspaceInsertBeforeRequestSchema, workspaceInsertSessionBeforeRequestSchema, workspaceListRequestSchema, workspaceRenameRequestSchema, workspaceUnarchiveSessionRequestSchema, } from "../api/workspace.schema.js";
+ import { skillListRequestSchema } from "../api/skills.schema.js";
+ import { agentPresetCopyRequestSchema, agentPresetListRequestSchema, agentPresetOpenDocumentRequestSchema, agentPresetReadRequestSchema, agentPresetRemoveRequestSchema, agentPresetSelectRequestSchema, } from "../api/agent-presets.schema.js";
+ import { goalCreateRequestSchema, goalEditRequestSchema, goalPauseRequestSchema, goalResumeRequestSchema, goalCompleteRequestSchema, goalClearRequestSchema, } from "../api/goals.schema.js";
+@@ -48,6 +48,7 @@
+     'workspace.insertBefore': { schema: workspaceInsertBeforeRequestSchema, invoke: (api, r) => api.workspace.insertBefore(r) },
+     'workspace.insertSessionBefore': { schema: workspaceInsertSessionBeforeRequestSchema, invoke: (api, r) => api.workspace.insertSessionBefore(r) },
+     'workspace.archiveSession': { schema: workspaceArchiveSessionRequestSchema, invoke: (api, r) => api.workspace.archiveSession(r) },
++    'workspace.unarchiveSession': { schema: workspaceUnarchiveSessionRequestSchema, invoke: (api, r) => api.workspace.unarchiveSession(r) },
+     'skill.list': { schema: skillListRequestSchema, invoke: (api, r) => api.skills.list(r) },
+     'agentPreset.list': { schema: agentPresetListRequestSchema, invoke: (api, r) => api.agentPresets.list(r) },
+     'agentPreset.select': { schema: agentPresetSelectRequestSchema, invoke: (api, r) => api.agentPresets.select(r) },
+--- a/dsh-host-apiproxy/lib/types/api/workspace.schema.js
++++ b/dsh-host-apiproxy/lib/types/api/workspace.schema.js
+@@ -75,4 +75,12 @@
+ export const workspaceArchiveSessionValueSchema = z.object({
+     archivedSessionIds: z.array(sessionIdSchema),
+ });
++/** workspace.unarchiveSession request payload. */
++export const workspaceUnarchiveSessionRequestSchema = z.object({
++    sessionId: sessionIdSchema,
++});
++/** workspace.unarchiveSession response value: the full updated archive set. */
++export const workspaceUnarchiveSessionValueSchema = z.object({
++    archivedSessionIds: z.array(sessionIdSchema),
++});
+ //# sourceMappingURL=workspace.schema.js.map
+\ No newline at end of file
+--- a/dsh-host-apiproxy/lib/types/api-proxy.js
++++ b/dsh-host-apiproxy/lib/types/api-proxy.js
+@@ -2635,6 +2635,11 @@
+                 }
+                 return ok(request, { archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds] });
+             },
++            async unarchiveSession(request) {
++                const { sessionId } = request.payload;
++                await ctx.workspaceRegistry.unarchiveSession(sessionId);
++                return ok(request, { archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds] });
++            },
+         },
+         host: {
+             describe(request) {
+--- a/dsh-host-apiproxy/lib/index.js
++++ b/dsh-host-apiproxy/lib/index.js
+@@ -3190,6 +3190,11 @@
+ 					});
+ 				}
+ 				return ok(request, { archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds] });
++			},
++			async unarchiveSession(request) {
++				const { sessionId } = request.payload;
++				await ctx.workspaceRegistry.unarchiveSession(sessionId);
++				return ok(request, { archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds] });
+ 			}
+ 		},
+ 		host: {
+@@ -4310,6 +4315,10 @@
+ const workspaceArchiveSessionRequestSchema = z$1.object({ sessionId: sessionIdSchema });
+ /** workspace.archiveSession response value: the full updated archive set. */
+ const workspaceArchiveSessionValueSchema = z$1.object({ archivedSessionIds: z$1.array(sessionIdSchema) });
++/** workspace.unarchiveSession request payload. */
++const workspaceUnarchiveSessionRequestSchema = z$1.object({ sessionId: sessionIdSchema });
++/** workspace.unarchiveSession response value: the full updated archive set. */
++const workspaceUnarchiveSessionValueSchema = z$1.object({ archivedSessionIds: z$1.array(sessionIdSchema) });
+ //#endregion
+ //#region lib/types/api/skills.schema.js
+ /**
+@@ -4779,6 +4788,10 @@
+ 		schema: workspaceArchiveSessionRequestSchema,
+ 		invoke: (api, r) => api.workspace.archiveSession(r)
+ 	},
++	"workspace.unarchiveSession": {
++		schema: workspaceUnarchiveSessionRequestSchema,
++		invoke: (api, r) => api.workspace.unarchiveSession(r)
++	},
+ 	"skill.list": {
+ 		schema: skillListRequestSchema,
+ 		invoke: (api, r) => api.skills.list(r)
+@@ -5267,6 +5280,7 @@
+ 	"workspace.insertBefore": workspaceInsertBeforeValueSchema,
+ 	"workspace.insertSessionBefore": workspaceInsertSessionBeforeValueSchema,
+ 	"workspace.archiveSession": workspaceArchiveSessionValueSchema,
++	"workspace.unarchiveSession": workspaceUnarchiveSessionValueSchema,
+ 	"skill.list": skillListValueSchema,
+ 	"agentPreset.list": agentPresetListValueSchema,
+ 	"agentPreset.select": agentPresetSelectValueSchema,
+@@ -5484,7 +5498,8 @@
+ 		delete: (payload, signal) => this.callUnary("workspace.delete", payload, signal),
+ 		insertBefore: (payload, signal) => this.callUnary("workspace.insertBefore", payload, signal),
+ 		insertSessionBefore: (payload, signal) => this.callUnary("workspace.insertSessionBefore", payload, signal),
+-		archiveSession: (payload, signal) => this.callUnary("workspace.archiveSession", payload, signal)
++		archiveSession: (payload, signal) => this.callUnary("workspace.archiveSession", payload, signal),
++		unarchiveSession: (payload, signal) => this.callUnary("workspace.unarchiveSession", payload, signal)
+ 	};
+ 	skills = { list: (payload, signal) => this.callUnary("skill.list", payload, signal) };
+ 	agentPresets = {

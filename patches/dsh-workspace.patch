@@ -1,0 +1,27 @@
+--- a/dsh-workspace/lib/index.js
++++ b/dsh-workspace/lib/index.js
+@@ -427,6 +427,24 @@
+ 			await this.setState({
+ 				...state,
+ 				archivedSessionIds: [...state.archivedSessionIds, sessionId]
++			});
++		});
++	}
++	/**
++	* Unarchive one session durably: remove it from the registry-global archive
++	* set. Its workspace accounting slot was kept at archive time, so the session
++	* reappears in its original position. An id absent from the archive set
++	* resolves without writing.
++	* @param sessionId - The session to restore.
++	* @returns resolution after durability.
++	*/
++	unarchiveSession(sessionId) {
++		return this.enqueueOperation(async () => {
++			const state = this.requireState();
++			if (!state.archivedSessionIds.includes(sessionId)) return;
++			await this.setState({
++				...state,
++				archivedSessionIds: state.archivedSessionIds.filter((id) => id !== sessionId)
+ 			});
+ 		});
+ 	}

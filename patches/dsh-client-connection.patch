@@ -1,0 +1,50 @@
+--- a/dsh-client-connection/lib/client.js
++++ b/dsh-client-connection/lib/client.js
+@@ -5546,6 +5546,8 @@
+ 		object({ sessionId: sessionIdSchema });
+ 		/** workspace.archiveSession response value: the full updated archive set. */
+ 		const workspaceArchiveSessionValueSchema = object({ archivedSessionIds: array(sessionIdSchema) });
++		/** workspace.unarchiveSession response value: the full updated archive set. */
++		const workspaceUnarchiveSessionValueSchema = object({ archivedSessionIds: array(sessionIdSchema) });
+ 		//#endregion
+ 		//#region ../../host/apiproxy/lib/types/api/events.schema.js
+ 		/**
+@@ -6098,6 +6100,7 @@
+ 			"workspace.insertBefore": workspaceInsertBeforeValueSchema,
+ 			"workspace.insertSessionBefore": workspaceInsertSessionBeforeValueSchema,
+ 			"workspace.archiveSession": workspaceArchiveSessionValueSchema,
++			"workspace.unarchiveSession": workspaceUnarchiveSessionValueSchema,
+ 			"skill.list": skillListValueSchema,
+ 			"agentPreset.list": agentPresetListValueSchema,
+ 			"agentPreset.select": agentPresetSelectValueSchema,
+@@ -6315,7 +6318,8 @@
+ 				delete: (payload, signal) => this.callUnary("workspace.delete", payload, signal),
+ 				insertBefore: (payload, signal) => this.callUnary("workspace.insertBefore", payload, signal),
+ 				insertSessionBefore: (payload, signal) => this.callUnary("workspace.insertSessionBefore", payload, signal),
+-				archiveSession: (payload, signal) => this.callUnary("workspace.archiveSession", payload, signal)
++				archiveSession: (payload, signal) => this.callUnary("workspace.archiveSession", payload, signal),
++				unarchiveSession: (payload, signal) => this.callUnary("workspace.unarchiveSession", payload, signal)
+ 			};
+ 			skills = { list: (payload, signal) => this.callUnary("skill.list", payload, signal) };
+ 			agentPresets = {
+@@ -9501,6 +9505,20 @@
+ 							const { sessionId } = request.payload;
+ 							if (!archivedSessionIds.includes(sessionId)) {
+ 								archivedSessionIds.push(sessionId);
++								emitHost({
++									type: "host/archived-sessions-changed",
++									archivedSessionIds: [...archivedSessionIds]
++								});
++							}
++							return ok(request, { archivedSessionIds: [...archivedSessionIds] });
++						},
++						unarchiveSession: (request) => {
++							const missing = requireSession(request);
++							if (missing !== void 0) return missing;
++							const { sessionId } = request.payload;
++							const at = archivedSessionIds.indexOf(sessionId);
++							if (at >= 0) {
++								archivedSessionIds.splice(at, 1);
+ 								emitHost({
+ 									type: "host/archived-sessions-changed",
+ 									archivedSessionIds: [...archivedSessionIds]
