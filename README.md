@@ -6,6 +6,8 @@ Adds an archived-sessions view and a restore action to the dsh Web GUI.
 
 - Shows an **Archived** section at the bottom of the sidebar, listing every archived session.
 - Adds a **Restore session** menu item that unarchives a session and returns it to its original position in its workspace.
+- The expanded section has a **title filter** (search box) that narrows the archived list as you type — the header shows `matched/total` while filtering.
+- With many archived sessions the expanded list is **internally scrollable**, so a long archive never pushes the rest of the sidebar out of view.
 - Works in both zh-CN and en locales.
 
 ## Install
@@ -51,3 +53,4 @@ Targets `@deepseek-ai/dsh@0.1.0-rc.6`. Patches are generated against that versio
 1. Archive any session: the **Archived** section appears at the bottom of the sidebar.
 2. Expand it and pick **Restore session** from the row menu.
 3. The session returns to its workspace group, the section disappears, and `archivedSessionIds` in `~/.dsh/storages/workspace.json` no longer contains the id.
+4. With several archived sessions, expand the section: a search field appears above the list — type to filter by title (the header shows `matched/total`), and scroll inside the list when it overflows the `max-height`.
