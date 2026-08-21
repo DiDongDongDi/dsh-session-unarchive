@@ -1,56 +1,56 @@
 # dsh-session-unarchive
 
-为 dsh Web GUI 增加「已归档」视图与「恢复会话」功能。
+为 dsh Web GUI 增加「已归档」视图与「恢复会话」功能，采用**纯 Cordis 插件**实现（host 端 + client 端），**零文件补丁** —— 不写入 dsh 安装目录任何文件，因此 dsh 升级不会覆盖本插件。
 
 ## 功能
 
-- 在侧栏底部显示「已归档」区块，列出所有已归档会话。
-- 行菜单提供「恢复会话」，取消归档后会话回到原工作区原位。
-- 展开区块后有**标题搜索框**，输入即过滤；过滤时区块头部显示「命中/总数」。
-- 归档会话较多时列表**内部可上下滚动**（max-height + overflow-y），长归档不会把侧栏其他内容挤出视口。
+- 侧栏底部（设置按钮旁）新增「已归档」按钮，显示已归档会话数。
+- 点击弹出面板，列出全部已归档会话，支持**标题过滤**与逐条**恢复**。
+- 恢复后会话回到原工作区原位；面板与内置侧栏通过 dsh 的 `host/archived-sessions-changed` 事件自动刷新。
 - 支持中英文案。
 
 ## 安装
 
 ```bash
-dsh plugin add github:dylan121322/dsh-session-unarchive
+cd "$DSH_HOME/profiles/web"          # 例如 ~/.dsh/profiles/web
+# package.json 的 dependencies 增加：
+#   "dsh-session-unarchive": "file:plugins/session-unarchive"
+# cordis.patch.yml 的 insert 增加：
+#   - id: session-unarchive
+#     name: dsh-session-unarchive
+pnpm install
+# 重启 dsh，刷新浏览器
 ```
 
-## 生效步骤
-
-1. 重启 dsh。首次启动会把补丁应用到 5 个 dsh 包并打印提示。
-2. 再重启一次 dsh（host 端文件在之后生效）。
-3. 刷新浏览器 http://127.0.0.1:3080。
-
-之后的每次启动会检测到补丁已应用、静默通过。插件幂等：不会重复应用或破坏文件，目标文件被本地改过时拒绝应用。
+> 如需 `dsh plugin add` 方式安装本仓库，`dsh plugin add github:dylan121322/dsh-session-unarchive` 也可用；本地 `file:` 形式最稳妥。
 
 ## 原理
 
-dsh 0.1.0-rc.6 的会话归档是单向操作：GUI 从所有视图隐藏已归档会话，且没有找回入口。数据并未删除——会话 id 只是被记入 `~/.dsh/storages/workspace.json`（`global.archivedSessionIds`）。
+插件包内两个文件：
 
-cordis patch 层只能覆盖条目属性、不能重定向既有插件的实现文件，因此本插件以文件补丁分发。插件入口（`index.js`）在启动时运行：用 `originals/` 里的 rc.6 原始文件校验每个目标，再用 `patches/` 里的 diff 打补丁。
+| 文件 | 作用 |
+|------|------|
+| `index.js` | Host 端插件（`apply(ctx)` + `inject: ["webServer","workspaceRegistry"]`），在 `webServer` 注册两个 HTTP 路由：`POST /api/session-unarchive/restore` 与 `GET /api/session-unarchive/list`。 |
+| `client.js` | Client 端预构建浏览器 bundle（`window.__ModuleLoader__.load({ id, factory })`），注册 `sidebar.footer.action` 附加位（`replaceRisk: none`）承载「已归档」按钮与面板。 |
 
-补丁覆盖的包：
+**不补丁如何实现恢复**：dsh 的归档是单向的——会话 id 记入 `~/.dsh/storages/workspace.json`（`global.archivedSessionIds`）后从所有视图隐藏。host 端直接调用 workspace registry 的**运行时方法**（`enqueueOperation` / `requireState` / `setState`，与内置 `archiveSession` 同构）把 id 从归档集合移除并持久化；`setState` 后 dsh 自身的 workspace 变更流会广播 `host/archived-sessions-changed`，client store 与内置侧栏自动刷新，无需额外接线。
 
-| 包 | 改动 |
-|----|------|
-| `dsh-workspace` | registry 增加 `unarchiveSession()`。 |
-| `dsh-host-apiproxy` | 增加 `workspace.unarchiveSession` RPC 全链路。 |
-| `dsh-client-connection` | 增加 fetch 映射与 fixture 模拟。 |
-| `dsh-client-runtime` | 增加 manager 与 service 方法。 |
-| `dsh-client-ui-workspace` | 增加已归档区块、恢复菜单与 i18n。 |
+**UI 数据来源**：面板使用 `sidebar.footer.action` 槽位的 standard props —— `useWorkspaces((s) => s.archivedSessionIds)`（已归档集合）与 `useSessions((s) => s)`（会话标题），二者均由 dsh client runtime 实时维护。
 
-## 手动兜底
-
-不用 `dsh plugin add` 时，可直接运行 `./apply.sh`（`./apply.sh check` 为干跑），效果相同。
+**升级韧性**：插件只调用运行时 service 方法，且加载时检测其存在性。若 dsh 升级重命名/移除了 `enqueueOperation/requireState/setState`，插件能力检查会失败，接口返回明确的 500 —— 不会破坏 dsh 或 registry。由于从不写 dsh 安装目录文件，`npm update @deepseek-ai/dsh` 无法覆盖本插件。
 
 ## 兼容性
 
-面向 `@deepseek-ai/dsh@0.1.0-rc.6`，补丁基于该版本的构建产物生成，其他版本可能无法应用。dsh 升级会覆盖补丁文件——升级后重新 `dsh plugin add`（或 `./apply.sh`）即可。
+在 `@deepseek-ai/dsh@0.1.0-rc.8`（web profile）验证通过。不依赖旧 rc.6 时代文件补丁所针对的包结构；只要 registry 暴露上述三个内部方法，运行时方案即版本无关。
 
 ## 验证
 
-1. 归档任意会话：侧栏底部出现「已归档」区块。
-2. 展开区块，行菜单选择「恢复会话」。
-3. 会话回到原工作区分组、区块消失，`~/.dsh/storages/workspace.json` 的 `archivedSessionIds` 不再包含该 id。
-4. 有多个归档会话时展开区块：列表上方出现搜索框——输入标题关键字过滤（头部显示「命中/总数」）；列表超出 `max-height` 时可内部滚动。
+1. 归档任意会话：侧栏底部出现「已归档 · n」按钮。
+2. 点击：面板列出已归档会话（标题过滤 + 逐条「恢复」）。
+3. 点击「恢复」：会话从面板消失、回到原工作区分组；`~/.dsh/storages/workspace.json` 的 `archivedSessionIds` 不再包含该 id。
+4. 归档会话较多时，面板列表可内部滚动。
+
+## 备注
+
+- 仓库此前以「启动时文件补丁」（对五个 dsh 包打补丁）分发，现已被纯插件形态取代；旧的 `patches/`、`originals/`、`apply.sh`、`cordis.patch.yml` 已移除。
+- `client.js` 为预构建 CJS bundle（dsh client 模块系统约定）。改动后请用自己的 `tsdown`/`esbuild` 步骤重建；随仓库发布的即为构建产物。

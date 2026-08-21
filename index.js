@@ -1,121 +1,154 @@
-// dsh-session-unarchive — boot-time patcher plugin (host side).
+// dsh-session-unarchive — host half（纯插件实现，零文件补丁）
 //
-// dsh 的会话「归档」是单向操作：GUI 无任何入口找回已归档会话。本插件为
-// dsh 0.1.0-rc.6 补齐「已归档」视图 + 恢复按钮，方式是 boot 时把补丁应用到
-// 5 个既有插件包的编译产物（cordis patch 层只能覆盖 entry 属性、不能重定向
-// 既有插件的实现文件，因此采用文件补丁分发）。
+// 为 dsh Web GUI 补齐「已归档会话 → 恢复」能力。与旧版（boot-time patcher +
+// 文件补丁）不同，本插件不修改任何 dsh 安装文件：
+//   - 恢复操作直接调用 workspace registry 的运行时方法（enqueueOperation /
+//     requireState / setState，与内置 archiveSession 同构），setState 持久化
+//     写盘；随后 apiproxy 的 workspace 流自动检测状态变化并广播
+//     host/archived-sessions-changed 事件，内置 UI 与 client store 自动同步。
+//   - 提供两个 HTTP 端点（webServer.register，同源 /api/ 前缀）：
+//       POST /api/session-unarchive/restore  { sessionId } → 恢复一个会话
+//       GET  /api/session-unarchive/list              → 已归档会话清单（兜底/调试）
+//   - dsh 升级不会覆盖本插件（位于 $DSH_HOME/profiles/web/plugins）。
+//     若上游重构 registry 内部方法，端点返回 500 并给出明确提示，不会破坏 dsh。
 //
-// 工作流程（dsh plugin add 安装后）：
-//   1. dsh 每次启动都会加载本插件；apply() 校验目标文件并打补丁
-//   2. 首次启动：5 个包被应用补丁，打印提示 → 再次重启 dsh 生效
-//   3. 之后启动：全部检测为已打补丁，静默通过（幂等）
-//   4. 目标文件被本地改过（非 pristine 非已打补丁）→ 拒绝应用并提示
-//
-// 校验基准：originals/（rc.6 原始文件）md5 一致才打补丁；补丁由
-// patches/ 下的 unified diff 重放（与 apply.sh 等价）。
-import { createHash } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+// 校验基准：registry 实例必须暴露 enqueueOperation/requireState/setState
+// （rc.6+ 编译产物均为普通实例方法），缺失即视为不兼容。
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const PATCHES = join(HERE, 'patches');
-const ORIGINALS = join(HERE, 'originals');
+const PATH_RESTORE = '/api/session-unarchive/restore';
+const PATH_LIST = '/api/session-unarchive/list';
 
-function md5(file) {
-  return createHash('md5').update(readFileSync(file)).digest('hex');
-}
+const MAX_BODY_BYTES = 16 * 1024;
 
-function listFiles(root, dir = root, out = []) {
-  for (const name of readdirSync(dir)) {
-    const full = join(dir, name);
-    if (statSync(full).isDirectory()) listFiles(root, full, out);
-    else out.push(relative(root, full));
-  }
-  return out;
-}
-
-/** Locate the dsh global install's plugin root. DSH_UNARCHIVE_DEST overrides (tests). */
-function locateDest() {
-  if (process.env.DSH_UNARCHIVE_DEST) return process.env.DSH_UNARCHIVE_DEST;
-  const roots = [];
-  try {
-    execFileSync('npm', ['root', '-g'], { encoding: 'utf8' })
-      .split('\n').map((line) => line.trim()).filter(Boolean)
-      .forEach((root) => roots.push(root));
-  } catch {
-    // npm unavailable — fall through to the static candidates below
-  }
-  roots.push('/usr/local/lib/node_modules');
-  if (process.env.HOME) {
-    roots.push(join(process.env.HOME, '.nvm', 'current', 'lib', 'node_modules'));
-    roots.push(join(process.env.HOME, '.local', 'lib', 'node_modules'));
-  }
-  for (const root of roots) {
-    const base = join(root, '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai');
-    if (existsSync(base)) return base;
-  }
-  return null;
-}
-
-/** Apply one package patch. Returns a status string. */
-function applyPackage(dest, patchFile) {
-  const pkg = patchFile.slice(0, -'.patch'.length);
-  let patchedCount = 0;
-  let pristineCount = 0;
-  const conflicts = [];
-  for (const rel of listFiles(join(ORIGINALS, pkg))) {
-    const target = join(dest, pkg, rel);
-    const src = join(ORIGINALS, pkg, rel);
-    if (!existsSync(target)) {
-      conflicts.push(`${pkg}/${rel} (missing target)`);
-      continue;
-    }
-    if (md5(src) === md5(target)) {
-      pristineCount++;
-    } else if (readFileSync(target, 'utf8').includes('unarchiveSession')) {
-      patchedCount++;
-    } else {
-      conflicts.push(`${pkg}/${rel} (locally modified)`);
-    }
-  }
-  if (patchedCount > 0 && pristineCount === 0) return `already patched — skip: ${pkg}`;
-  if (conflicts.length > 0) return `SKIPPED: ${pkg} — ${conflicts.join('; ')}`;
-  const result = spawnSync('patch', ['-p1', '--silent'], {
-    cwd: dest,
-    input: readFileSync(join(PATCHES, patchFile)),
-    encoding: 'utf8'
+/** Collect a JSON request body with a hard size cap. */
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (chunks.length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch (error) {
+        reject(new Error(`invalid JSON body: ${error.message}`));
+      }
+    });
+    req.on('error', reject);
   });
-  if (result.status === 0) return `applied: ${pkg}`;
-  return `patch failed (exit ${result.status}): ${pkg}`;
 }
 
-/**
-* Boot hook: reconcile the 5 plugin packages against the shipped patches.
-* Idempotent and conflict-safe — see the header comment for the workflow.
-* @param ctx - cordis context (unused; console output is visible in dsh logs).
-*/
+function writeJson(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store'
+  });
+  res.end(body);
+}
+
+export const name = 'session-unarchive';
+
+// 硬依赖：等待 webServer（HTTP 路由）与 workspaceRegistry（归档状态）注册
+// 后再 apply，避免启动早期 ctx.get 返回 undefined。
+export const inject = ['webServer', 'workspaceRegistry'];
+
 export function apply(ctx) {
-  const dest = locateDest();
-  if (dest === null) {
-    console.warn('[dsh-session-unarchive] cannot locate @deepseek-ai/dsh install — no patches applied');
+  const webServer = ctx.get('webServer');
+  const registry = ctx.get('workspaceRegistry');
+  if (webServer === undefined || registry === undefined) {
+    console.warn('[dsh-session-unarchive] webServer/workspaceRegistry unavailable — host half disabled');
     return;
   }
-  const patchFiles = readdirSync(PATCHES).filter((name) => name.endsWith('.patch')).sort();
-  const applied = [];
-  let conflicts = 0;
-  for (const patchFile of patchFiles) {
-    const status = applyPackage(dest, patchFile);
-    console.log(`[dsh-session-unarchive] ${status}`);
-    if (status.startsWith('applied:')) applied.push(status.split(': ')[1]);
-    if (status.startsWith('SKIPPED:')) conflicts++;
+
+  const registryCapable =
+    typeof registry.enqueueOperation === 'function' &&
+    typeof registry.requireState === 'function' &&
+    typeof registry.setState === 'function';
+
+  // 恢复一个会话：从 registry-global 归档集合移除（id 不在集合中则幂等返回）。
+  // 与内置 archiveSession 共用写串行队列与持久化路径；成功后由 apiproxy 的
+  // workspace 变更流广播 host/archived-sessions-changed，UI 自动恢复显示。
+  async function restoreSession(sessionId) {
+    if (!registryCapable) {
+      throw new Error(
+        'workspace registry no longer exposes enqueueOperation/requireState/setState ' +
+        '(dsh 升级改变了内部结构?) — 请升级本插件或反馈上游'
+      );
+    }
+    await registry.enqueueOperation(async () => {
+      const state = registry.requireState();
+      if (!state.archivedSessionIds.includes(sessionId)) return;
+      await registry.setState({
+        ...state,
+        archivedSessionIds: state.archivedSessionIds.filter((id) => id !== sessionId)
+      });
+    });
   }
-  if (applied.length > 0) {
-    console.log(`[dsh-session-unarchive] ${applied.length} package(s) patched (${applied.join(', ')}). Host files take effect after the NEXT dsh restart; client files after a browser refresh.`);
-  } else if (conflicts === 0) {
-    console.log('[dsh-session-unarchive] up to date — all packages already patched.');
-  } else {
-    console.warn('[dsh-session-unarchive] conflicts detected — no patches applied for those packages. See above.');
-  }
+
+  // 路由注册用 ctx.effect 包裹，返回的 disposer 在插件 stop/update/undefine 时
+  // 自动移除路由（避免停用后端点仍生效、或重复注册 duplicate route 报错）。
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: PATH_RESTORE,
+    handler: async (req, res) => {
+      try {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { ok: false, error: 'method not allowed (use POST)' });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const sessionId = body?.sessionId;
+        if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200) {
+          writeJson(res, 400, { ok: false, error: 'sessionId must be a non-empty string' });
+          return;
+        }
+        await restoreSession(sessionId);
+        writeJson(res, 200, { ok: true, archivedSessionIds: [...registry.archivedSessionIds] });
+      } catch (error) {
+        writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }));
+
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: PATH_LIST,
+    handler: async (req, res) => {
+      try {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          writeJson(res, 405, { ok: false, error: 'method not allowed (use GET)' });
+          return;
+        }
+        const ids = registry.archivedSessionIds ?? [];
+        const sessionQuery = ctx.get('sessionQuery');
+        const archived = [];
+        for (const id of ids) {
+          let title;
+          try {
+            title = await sessionQuery?.readTitle?.(id);
+          } catch {
+            title = undefined;
+          }
+          archived.push({ sessionId: id, title: typeof title === 'string' && title.length > 0 ? title : id });
+        }
+        writeJson(res, 200, { ok: true, archived });
+      } catch (error) {
+        writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }));
+
+  console.log(`[dsh-session-unarchive] host ready: ${PATH_RESTORE} ${registryCapable ? '(registry OK)' : '(registry API MISSING)'}`);
 }

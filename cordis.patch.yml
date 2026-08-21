@@ -1,5 +1,0 @@
-# dsh-session-unarchive bundle patch: register this package as a plugin entry
-# so dsh boots it on every start (the boot-time patcher in index.js).
-- insert:
-    - id: session-unarchive
-      name: dsh-session-unarchive

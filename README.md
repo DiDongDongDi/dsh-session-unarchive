@@ -1,56 +1,56 @@
 # dsh-session-unarchive
 
-Adds an archived-sessions view and a restore action to the dsh Web GUI.
+Adds an archived-sessions view and a restore action to the dsh Web GUI — implemented as a **pure Cordis plugin** (host half + client half), with **zero file patches**. It survives dsh upgrades: nothing is written under the dsh install directory.
 
 ## What it does
 
-- Shows an **Archived** section at the bottom of the sidebar, listing every archived session.
-- Adds a **Restore session** menu item that unarchives a session and returns it to its original position in its workspace.
-- The expanded section has a **title filter** (search box) that narrows the archived list as you type — the header shows `matched/total` while filtering.
-- With many archived sessions the expanded list is **internally scrollable**, so a long archive never pushes the rest of the sidebar out of view.
+- Adds an **Archived** button at the bottom of the sidebar (beside Settings), showing the archived-session count.
+- Clicking it opens a popover panel listing every archived session, with a **title filter** and a per-row **Restore** action.
+- Restoring a session returns it to its original workspace position; the panel and the built-in sidebar update automatically via dsh's `host/archived-sessions-changed` event.
 - Works in both zh-CN and en locales.
 
 ## Install
 
 ```bash
-dsh plugin add github:dylan121322/dsh-session-unarchive
+cd "$DSH_HOME/profiles/web"          # e.g. ~/.dsh/profiles/web
+# add the local plugin dependency
+#   "dsh-session-unarchive": "file:plugins/session-unarchive"   → package.json dependencies
+# register the entry in cordis.patch.yml:
+#   - id: session-unarchive
+#     name: dsh-session-unarchive
+pnpm install
+# restart dsh, then refresh the browser
 ```
 
-## Activate
+> For a `dsh plugin add`-style install of this exact repo, `dsh plugin add github:dylan121322/dsh-session-unarchive` works as long as the bundle resolver reaches the profile's `node_modules`; the local `file:` form is the most reliable.
 
-1. Restart dsh. The first boot applies the patches to five dsh packages and prints a notice.
-2. Restart dsh once more (host files take effect after that).
-3. Refresh the browser at http://127.0.0.1:3080.
+## Architecture
 
-Every later boot detects the patches as applied and stays quiet. The plugin is idempotent: it never re-applies or corrupts files, and it refuses to touch targets that were modified locally.
+Two files under the plugin package:
 
-## How it works
+| File | Role |
+|------|------|
+| `index.js` | Host half — a Cordis plugin (`apply(ctx)` + `inject: ["webServer","workspaceRegistry"]`) that registers two HTTP routes on `webServer`: `POST /api/session-unarchive/restore` and `GET /api/session-unarchive/list`. |
+| `client.js` | Client half — a prebuilt browser bundle (`window.__ModuleLoader__.load({ id, factory })`) that registers a `sidebar.footer.action` slot occupant (`replaceRisk: none`) for the Archived button + panel. |
 
-dsh 0.1.0-rc.6 archives sessions one-way: the GUI hides them from every view and offers no way back. The data is never deleted — the session id is only recorded in `~/.dsh/storages/workspace.json` (`global.archivedSessionIds`).
+**How unarchive works without patching dsh.** Archiving in dsh is one-way: a session id is recorded in `~/.dsh/storages/workspace.json` (`global.archivedSessionIds`) and hidden from every view. The host half calls the workspace registry's **runtime methods** (`enqueueOperation` / `requireState` / `setState` — the same internal API the built-in `archiveSession` uses) to remove the id from the archive set and persist it. After `setState`, dsh's own workspace stream detects the change and broadcasts `host/archived-sessions-changed`, so the client store and the built-in sidebar refresh with no extra wiring.
 
-The cordis patch layer can override entry properties but cannot redirect an existing plugin's implementation file, so this bundle ships file patches instead. The plugin entry (`index.js`) runs at boot, verifies each target against the pristine originals in `originals/`, and applies the diffs in `patches/`.
+**Data for the UI.** The panel uses the `sidebar.footer.action` slot's standard props: `useWorkspaces((s) => s.archivedSessionIds)` for the archived set and `useSessions((s) => s)` for titles — both already kept live by dsh's client runtime.
 
-Patched packages:
-
-| Package | Change |
-|---------|--------|
-| `dsh-workspace` | Adds `unarchiveSession()` to the workspace registry. |
-| `dsh-host-apiproxy` | Adds the `workspace.unarchiveSession` RPC end to end. |
-| `dsh-client-connection` | Adds fetch mapping and fixture support. |
-| `dsh-client-runtime` | Adds manager and service methods. |
-| `dsh-client-ui-workspace` | Adds the archived section, restore menu, and i18n. |
-
-## Manual fallback
-
-If `dsh plugin add` is not an option, `./apply.sh` applies the same patches directly (`./apply.sh check` for a dry run).
+**Upgrade resilience.** Because the plugin only touches runtime service methods (and those are detected at load time), a dsh upgrade that renames or removes `enqueueOperation/requireState/setState` fails the plugin's capability check and the endpoint returns a clear 500 — it never corrupts dsh or the registry. No file under the dsh install is ever written, so `npm update @deepseek-ai/dsh` cannot overwrite this plugin.
 
 ## Compatibility
 
-Targets `@deepseek-ai/dsh@0.1.0-rc.6`. Patches are generated against that version's build output; other versions may not apply. A dsh upgrade overwrites the patched files — re-run `dsh plugin add` (or `./apply.sh`) after upgrading.
+Tested on `@deepseek-ai/dsh@0.1.0-rc.8` (web profile). It does not depend on the patched-package layout of the older rc.6-era file-patch build; the runtime-API approach is version-agnostic as long as the registry exposes the three internal methods above.
 
 ## Verify
 
-1. Archive any session: the **Archived** section appears at the bottom of the sidebar.
-2. Expand it and pick **Restore session** from the row menu.
-3. The session returns to its workspace group, the section disappears, and `archivedSessionIds` in `~/.dsh/storages/workspace.json` no longer contains the id.
-4. With several archived sessions, expand the section: a search field appears above the list — type to filter by title (the header shows `matched/total`), and scroll inside the list when it overflows the `max-height`.
+1. Archive any session: the **Archived · n** button appears at the sidebar foot.
+2. Click it: the popover lists archived sessions (title filter + per-row **Restore**).
+3. Click **Restore**: the session disappears from the panel and reappears in its workspace group; `archivedSessionIds` in `~/.dsh/storages/workspace.json` no longer contains the id.
+4. With several archived sessions the list scrolls inside the panel.
+
+## Notes
+
+- The repository previously shipped as a boot-time patcher (file patches over five dsh packages). That design is superseded by this pure-plugin form; the old `patches/`, `originals/`, `apply.sh`, and `cordis.patch.yml` were removed.
+- `client.js` is a prebuilt CJS bundle (dsh's client module system). Rebuild it from source with your own `tsdown`/`esbuild` step if you change it; the shipped file is the canonical artifact.
