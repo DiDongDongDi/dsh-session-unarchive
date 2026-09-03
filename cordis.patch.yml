@@ -1,0 +1,7 @@
+# dsh-session-unarchive bundle patch: register this package as a plugin entry
+# so dsh boots it on every start. The host half (index.js) registers the
+# unarchive HTTP routes; the client half (client.js, declared via dsh.client)
+# is picked up automatically by client-modules.
+- insert:
+    - id: session-unarchive
+      name: dsh-session-unarchive
