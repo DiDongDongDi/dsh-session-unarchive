@@ -26,8 +26,29 @@ window.__ModuleLoader__.load({
 			const tag = document.createElement("style");
 			tag.setAttribute("data-plugin-css", "dsh-session-unarchive");
 			tag.textContent = [
+				// 行内 style 优先级更高，交互态一律 !important 覆盖。
 				".dsh-unarchive-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)!important;color:var(--dsw-alias-label-primary)!important}",
-				".dsh-unarchive-restore:hover{background:var(--dsw-alias-interactive-bg-hover)!important;color:var(--dsw-alias-label-primary)!important}"
+				// 面板：轻微上浮淡入，避免深色下「硬切」出现。
+				"@keyframes dsh-unarchive-in{from{opacity:0;transform:translateY(4px) scale(.985)}to{opacity:1;transform:none}}",
+				".dsh-unarchive-panel{animation:dsh-unarchive-in .12s ease-out}",
+				"@media (prefers-reduced-motion:reduce){.dsh-unarchive-panel{animation:none}}",
+				// 列表行：hover 才出现底色与「恢复」按钮，静息态保持安静。
+				".dsh-unarchive-row{transition:background .1s ease}",
+				".dsh-unarchive-row:hover{background:var(--dsw-alias-interactive-bg-hover)}",
+				".dsh-unarchive-restore{transition:opacity .1s ease,background .1s ease,color .1s ease}",
+				"@media (hover:hover){.dsh-unarchive-restore{opacity:0}}",
+				".dsh-unarchive-row:hover .dsh-unarchive-restore,.dsh-unarchive-restore:focus-visible,.dsh-unarchive-restore[data-busy=\"true\"]{opacity:1}",
+				".dsh-unarchive-restore:hover{background:var(--dsw-alias-bg-layer-3)!important;color:var(--dsw-alias-label-primary)!important}",
+				".dsh-unarchive-restore:focus-visible{outline:none;box-shadow:0 0 0 1px var(--dsw-alias-focus-ring)}",
+				// 搜索框：静息态无边框，聚焦时才给 focus ring。
+				".dsh-unarchive-search::placeholder{color:var(--dsw-alias-label-tertiary)}",
+				".dsh-unarchive-search:focus{background:var(--dsw-alias-bg-layer-3)!important;box-shadow:0 0 0 1px var(--dsw-alias-focus-ring)}",
+				// 滚动条：深色下默认滚动条过亮，改为细窄半透明。
+				".dsh-unarchive-list{scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2) transparent}",
+				".dsh-unarchive-list::-webkit-scrollbar{width:10px}",
+				".dsh-unarchive-list::-webkit-scrollbar-track{background:transparent}",
+				".dsh-unarchive-list::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l2);border:3px solid transparent;background-clip:padding-box;border-radius:999px}",
+				".dsh-unarchive-list::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-scrollbar-hover-l2);border:3px solid transparent;background-clip:padding-box}"
 			].join("\n");
 			document.head.appendChild(tag);
 		}
@@ -183,15 +204,18 @@ window.__ModuleLoader__.load({
 			const panelStyle = {
 				position: "fixed",
 				zIndex: 60,
-				width: 280,
+				width: 300,
 				maxWidth: "calc(100vw - 16px)",
 				left: anchor?.left ?? 12,
 				bottom: anchor?.bottom ?? 48,
 				background: "var(--dsw-alias-bg-overlay)",
+				backdropFilter: "blur(12px)",
+				WebkitBackdropFilter: "blur(12px)",
 				color: "var(--dsw-alias-label-primary)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				borderRadius: 12,
-				boxShadow: "0 8px 28px rgba(0,0,0,.28)",
+				// 深色下单层阴影会糊成一片，用近距离接触阴影 + 远距离环境阴影分层。
+				boxShadow: "0 1px 2px rgba(0,0,0,.24), 0 12px 32px rgba(0,0,0,.40)",
 				overflow: "hidden",
 				display: "flex",
 				flexDirection: "column"
@@ -206,9 +230,10 @@ window.__ModuleLoader__.load({
 			} else {
 				const listItems = visible.map((row) => h("div", {
 					key: row.id,
+					className: "dsh-unarchive-row",
 					style: {
 						display: "flex", alignItems: "center", gap: 6,
-						padding: "5px 8px", borderRadius: 8,
+						padding: "6px 6px 6px 10px", borderRadius: 8,
 						fontSize: 12
 					}
 				},
@@ -225,16 +250,19 @@ window.__ModuleLoader__.load({
 						disabled: busyId !== null,
 						className: "dsh-unarchive-restore",
 						"data-unarchive-restore": row.id,
+						"data-busy": busyId === row.id ? "true" : "false",
+						title: t("restore"),
 						style: {
 							cursor: busyId === null ? "pointer" : "default",
 							flex: "none",
 							display: "inline-flex", alignItems: "center", gap: 4,
-							padding: "3px 8px",
+							padding: "3px 7px",
 							borderRadius: 6,
-							border: "1px solid var(--dsw-alias-border-l2)",
-							background: "var(--dsw-alias-bg-layer-1)",
+							border: "none",
+							background: "transparent",
 							color: "var(--dsw-alias-label-secondary)",
-							fontSize: 11
+							fontSize: 11,
+							lineHeight: "16px"
 						},
 						onClick: () => restore(row.id)
 					},
@@ -245,13 +273,14 @@ window.__ModuleLoader__.load({
 						t("panel.empty"))
 					: null;
 				panelBody = h("div", {
+					className: "dsh-unarchive-list",
 					style: {
 						maxHeight: "min(45vh, 380px)",
 						overflowY: "auto",
-						padding: "0 6px 8px",
+						padding: "6px",
 						display: "flex",
 						flexDirection: "column",
-						gap: 2
+						gap: 1
 					}
 				}, empty, listItems);
 			}
@@ -260,16 +289,18 @@ window.__ModuleLoader__.load({
 				? h("input", {
 					type: "text",
 					value: query,
+					className: "dsh-unarchive-search",
 					placeholder: t("search.placeholder"),
 					"aria-label": t("search.placeholder"),
 					style: {
-						margin: "0 10px 8px",
+						margin: "0 10px 10px",
 						padding: "6px 10px",
 						borderRadius: 8,
-						border: "1px solid var(--dsw-alias-border-l2)",
-						background: "var(--dsw-alias-bg-layer-1)",
+						border: "none",
+						background: "var(--dsw-alias-bg-layer-2)",
 						color: "var(--dsw-alias-label-primary)",
 						fontSize: 12,
+						lineHeight: "18px",
 						outline: "none"
 					},
 					onChange: (e) => setQuery(e.target.value),
@@ -277,26 +308,49 @@ window.__ModuleLoader__.load({
 				})
 				: null;
 
+			// header + 搜索框合成一个「头部区」，底部一条 hairline 与列表分层。
 			const header = h("div", {
 				style: {
-					display: "flex", alignItems: "center", justifyContent: "space-between",
-					padding: "10px 12px", fontSize: 13, fontWeight: 600
+					display: "flex", flexDirection: "column",
+					borderBottom: "1px solid var(--dsw-alias-hairline, var(--dsw-alias-border-l2))"
 				}
 			},
-				h("span", null, t("panel.title")),
-				h("span", {
-					style: { color: "var(--dsw-alias-label-secondary)", fontSize: 12, fontWeight: 400 }
-				}, rows.length === 0 ? "" : `${rows.length}`));
+				h("div", {
+					style: {
+						display: "flex", alignItems: "center", gap: 6,
+						padding: "10px 12px", fontSize: 13, fontWeight: 600
+					}
+				},
+					h("span", { style: { flex: 1, minWidth: 0 } }, t("panel.title")),
+					rows.length === 0 ? null : h("span", {
+						style: {
+							flex: "none",
+							padding: "1px 7px",
+							borderRadius: 999,
+							background: "var(--dsw-alias-bg-layer-2)",
+							color: "var(--dsw-alias-label-secondary)",
+							fontSize: 11, fontWeight: 500, lineHeight: "16px"
+						}
+					}, `${rows.length}`)),
+				searchBox);
 
 			const panel = open ? h("div", {
+				className: "dsh-unarchive-panel",
 				style: panelStyle,
 				"data-unarchive-panel": true,
 				role: "dialog",
 				"aria-label": t("panel.title")
-			}, header, searchBox, panelBody,
+			}, header, panelBody,
 				error !== null && h("div", {
 					role: "alert",
-					style: { padding: "8px 12px", fontSize: 12, color: "var(--dsw-alias-state-error-primary)" }
+					style: {
+						padding: "8px 12px",
+						fontSize: 12,
+						lineHeight: "16px",
+						background: "var(--dsw-alias-state-error-secondary, transparent)",
+						color: "var(--dsw-alias-state-error-primary)",
+						borderTop: "1px solid var(--dsw-alias-hairline, var(--dsw-alias-border-l2))"
+					}
 				}, error)) : null;
 
 			return h(Fragment, null,
