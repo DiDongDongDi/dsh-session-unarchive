@@ -38,11 +38,12 @@ window.__ModuleLoader__.load({
 				".dsh-unarchive-restore{transition:opacity .1s ease,background .1s ease,color .1s ease}",
 				"@media (hover:hover){.dsh-unarchive-restore{opacity:0}}",
 				".dsh-unarchive-row:hover .dsh-unarchive-restore,.dsh-unarchive-restore:focus-visible,.dsh-unarchive-restore[data-busy=\"true\"]{opacity:1}",
-				".dsh-unarchive-restore:hover{background:var(--dsw-alias-bg-layer-3)!important;color:var(--dsw-alias-label-primary)!important}",
-				".dsh-unarchive-restore:focus-visible{outline:none;box-shadow:0 0 0 1px var(--dsw-alias-focus-ring)}",
-				// 搜索框：静息态无边框，聚焦时才给 focus ring。
+				// 本版 dsh 没有 --dsw-alias-focus-ring，ring 用 label-tertiary 兜底。
+				".dsh-unarchive-restore:hover{background:var(--dsw-alias-interactive-bg-hover-solid)!important;color:var(--dsw-alias-label-primary)!important}",
+				".dsh-unarchive-restore:focus-visible{outline:none;box-shadow:0 0 0 1px var(--dsw-alias-focus-ring, var(--dsw-alias-label-tertiary))}",
+				// 搜索框：静息态无边框，聚焦时才给 ring。
 				".dsh-unarchive-search::placeholder{color:var(--dsw-alias-label-tertiary)}",
-				".dsh-unarchive-search:focus{background:var(--dsw-alias-bg-layer-3)!important;box-shadow:0 0 0 1px var(--dsw-alias-focus-ring)}",
+				".dsh-unarchive-search:focus{box-shadow:0 0 0 1px var(--dsw-alias-focus-ring, var(--dsw-alias-label-tertiary))}",
 				// 滚动条：深色下默认滚动条过亮，改为细窄半透明。
 				".dsh-unarchive-list{scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2) transparent}",
 				".dsh-unarchive-list::-webkit-scrollbar{width:10px}",
@@ -208,9 +209,9 @@ window.__ModuleLoader__.load({
 				maxWidth: "calc(100vw - 16px)",
 				left: anchor?.left ?? 12,
 				bottom: anchor?.bottom ?? 48,
-				background: "var(--dsw-alias-bg-overlay)",
-				backdropFilter: "blur(12px)",
-				WebkitBackdropFilter: "blur(12px)",
+				// bg-overlay 是遮罩色（dark 下 #61666b 中灰），不是浮层表面色；
+				// 浮层要用 bg-layer-2（light #fff / dark #2c2c2e）。
+				background: "var(--dsw-alias-bg-layer-2)",
 				color: "var(--dsw-alias-label-primary)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				borderRadius: 12,
@@ -297,7 +298,8 @@ window.__ModuleLoader__.load({
 						padding: "6px 10px",
 						borderRadius: 8,
 						border: "none",
-						background: "var(--dsw-alias-bg-layer-2)",
+						// layer-1/2/3 在浅色主题下全是 #fff，内嵌面要用半透明 tint 才能两套主题都可见。
+						background: "var(--dsw-alias-interactive-bg-hover)",
 						color: "var(--dsw-alias-label-primary)",
 						fontSize: 12,
 						lineHeight: "18px",
@@ -327,7 +329,7 @@ window.__ModuleLoader__.load({
 							flex: "none",
 							padding: "1px 7px",
 							borderRadius: 999,
-							background: "var(--dsw-alias-bg-layer-2)",
+							background: "var(--dsw-alias-interactive-bg-hover)",
 							color: "var(--dsw-alias-label-secondary)",
 							fontSize: 11, fontWeight: 500, lineHeight: "16px"
 						}
@@ -347,7 +349,7 @@ window.__ModuleLoader__.load({
 						padding: "8px 12px",
 						fontSize: 12,
 						lineHeight: "16px",
-						background: "var(--dsw-alias-state-error-secondary, transparent)",
+						// state-error-secondary 是纯红 #f25a5a（并非浅色底），不能当背景。
 						color: "var(--dsw-alias-state-error-primary)",
 						borderTop: "1px solid var(--dsw-alias-hairline, var(--dsw-alias-border-l2))"
 					}
